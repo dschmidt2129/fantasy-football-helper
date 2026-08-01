@@ -1,0 +1,27 @@
+{
+  "default_league_id": 631385,
+  "default_year": 2026,
+  "default_team_id": 1,
+  "leagues": [
+    {
+      "league_id": [631385,1252712401,1241832607],
+      "years": [2024, 2025, 2026],
+      "default_year": 2026,
+      "default_team_id": 1,
+      "teams": [
+        {
+          "team_id": 1,
+          "team_name": "The League"
+        },
+        {
+          "team_id": 13,
+          "team_name": "Big Herm"
+        },
+        {
+            "team_id": 2,
+            "team_name": "Columbus League"
+        }
+      ]
+    }
+  ]
+}
