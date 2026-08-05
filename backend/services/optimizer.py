@@ -8,7 +8,7 @@ from backend.services.espn_client import ESPNClient
 
 @dataclass
 class RecommendationConfig:
-    free_agent_sample_size: int = 60
+    free_agent_sample_size: int = 30
     top_free_agents_per_position: int = 12
     top_recommendations: int = 10
     min_score_improvement: float = 0.75
@@ -18,6 +18,8 @@ class RecommendationConfig:
 
 class RosterOptimizer:
     """Computes roster upgrade suggestions from ESPN league data."""
+
+    _IR_STATUSES = {"IR", "INJURY_RESERVE", "INJURED_RESERVE"}
 
     def __init__(self, client: Optional[ESPNClient] = None, config: Optional[RecommendationConfig] = None):
         self.client = client or ESPNClient()
@@ -64,6 +66,31 @@ class RosterOptimizer:
             grouped.setdefault(position, []).append(player)
         return grouped
 
+    @staticmethod
+    def _build_snapshot_from_rows(players: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        """Build a key->metrics snapshot from already-fetched player rows."""
+        snapshot: Dict[str, Dict[str, float]] = {}
+        for row in players:
+            key = row.get("key")
+            if not key:
+                continue
+            snapshot[key] = {
+                "total_points": float(row.get("total_points", 0.0)),
+                "points_per_game": float(row.get("points_per_game", 0.0)),
+            }
+        return snapshot
+
+    @classmethod
+    def _is_ir_player(cls, player_row: Dict[str, Any]) -> bool:
+        status = str(player_row.get("status", "")).strip().upper()
+        return status in cls._IR_STATUSES
+
+    @classmethod
+    def _drop_sort_key(cls, player_row: Dict[str, Any]) -> Tuple[int, float]:
+        # IR players are prioritized for drop regardless of score.
+        ir_priority = 0 if cls._is_ir_player(player_row) else 1
+        return (ir_priority, float(player_row.get("score", 0.0)))
+
     def analyze_league(
         self,
         league_id: int,
@@ -89,11 +116,9 @@ class RosterOptimizer:
             size=self.config.free_agent_sample_size,
         )
 
-        current_snapshot = self.client.get_scoring_snapshot(
-            league_id=league_id,
-            year=year,
-            free_agent_size=self.config.free_agent_sample_size,
-        )
+        # Reuse the already-fetched current-year roster + free agents and avoid
+        # a second full league fetch on every analyze request.
+        current_snapshot = self._build_snapshot_from_rows(roster_players + free_agents)
 
         prior_snapshot: Dict[str, Dict[str, float]] = {}
         prior_year = year - 1
@@ -122,8 +147,9 @@ class RosterOptimizer:
             if not candidates:
                 continue
 
-            # Compare against the weakest same-position roster player.
-            drop_candidate = sorted(candidates, key=lambda p: p.get("score", 0.0))[0]
+            # Compare against the highest-priority drop candidate.
+            # IR players are chosen first; otherwise use the weakest score.
+            drop_candidate = sorted(candidates, key=self._drop_sort_key)[0]
 
             top_free_agents = sorted(
                 free_agent_list,

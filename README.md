@@ -11,7 +11,7 @@ The app connects to your private league, loads your roster, checks free agency, 
 - FastAPI backend in [backend/main.py](backend/main.py)
 - ESPN data client in [backend/services/espn_client.py](backend/services/espn_client.py)
 - Roster optimizer in [backend/services/optimizer.py](backend/services/optimizer.py)
-- Desktop UI (tkinter) in [frontend/desktop_app.py](frontend/desktop_app.py)
+- React UI in [frontend/react-app](frontend/react-app)
 
 ## Setup
 
@@ -79,10 +79,16 @@ pip install -r requirements.txt
 ## Run backend API
 
 ```bash
-uvicorn backend.main:app --reload
+uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 Base URL: `http://127.0.0.1:8000`
+
+For local React development, CORS defaults to:
+- `http://127.0.0.1:5173`
+- `http://localhost:5173`
+
+Override allowed frontend origins with `FRONTEND_ORIGINS` (comma-separated).
 
 Useful endpoints:
 - `GET /api/health`
@@ -90,15 +96,19 @@ Useful endpoints:
 - `GET /api/leagues/{league_id}/analysis?year=2026&team_id=1`
 - `GET /api/leagues/{league_id}/analysis?year=2026&team_name=My Team`
 
-## Run desktop app
+## Run React app
 
 ```bash
-python frontend/desktop_app.py
+cd frontend/react-app
+npm install
+npm run dev
 ```
+
+React app URL: `http://127.0.0.1:5173`
 
 In the UI:
 1. Select `League ID`, `Season Year`, and `Team ID` from dropdowns.
-2. Dropdown values come from [frontend/ui_config.json](frontend/ui_config.json).
+2. Dropdown values are loaded from backend endpoint `GET /api/ui-config`.
 3. Click `Analyze Roster`.
 
 The app displays:
@@ -123,6 +133,7 @@ Then it:
 - If the selected league has no teams configured, analysis will run without a team override.
 - Previous season data is best-effort and depends on ESPN data availability for that league.
 - The app currently focuses on add/drop suggestions; trade logic is not included yet.
+- If needed, set `VITE_API_BASE_URL` in `frontend/react-app/.env` to point React at a different API host.
 
 ## References
 
