@@ -12,14 +12,17 @@ class RecommendationConfig:
     top_free_agents_per_position: int = 12
     top_recommendations: int = 10
     min_score_improvement: float = 0.75
-    current_year_weight: float = 0.65
-    prior_year_weight: float = 0.35
+    current_year_weight: float = 0.6
+    prior_year_weight: float = 0.1
+    injury_context_weight: float = 0.2
+    matchup_weight: float = 0.1
 
 
 class RosterOptimizer:
     """Computes roster upgrade suggestions from ESPN league data."""
 
     _IR_STATUSES = {"IR", "INJURY_RESERVE", "INJURED_RESERVE"}
+    _INJURY_CONTEXT_STATUSES = _IR_STATUSES | {"O", "OUT"}
 
     def __init__(self, client: Optional[ESPNClient] = None, config: Optional[RecommendationConfig] = None):
         self.client = client or ESPNClient()
@@ -45,16 +48,20 @@ class RosterOptimizer:
         prior_snapshot: Dict[str, Dict[str, float]],
     ) -> float:
         key = player_row.get("key")
-        current_ppg = float(player_row.get("points_per_game", 0.0))
+        current_points = float(player_row.get("total_points", player_row.get("points_per_game", 0.0)))
 
         if key in current_snapshot:
-            current_ppg = float(current_snapshot[key].get("points_per_game", current_ppg))
+            current_points = float(
+                current_snapshot[key].get("total_points", current_snapshot[key].get("points_per_game", current_points))
+            )
 
-        prior_ppg = float(prior_snapshot.get(key, {}).get("points_per_game", 0.0))
+        prior_points = float(
+            prior_snapshot.get(key, {}).get("total_points", prior_snapshot.get(key, {}).get("points_per_game", 0.0))
+        )
 
         weighted = (
-            self.config.current_year_weight * current_ppg
-            + self.config.prior_year_weight * prior_ppg
+            self.config.current_year_weight * current_points
+            + self.config.prior_year_weight * prior_points
         )
         return round(weighted, 3)
 
@@ -86,6 +93,43 @@ class RosterOptimizer:
         return status in cls._IR_STATUSES
 
     @classmethod
+    def _is_injury_context_player(cls, player_row: Dict[str, Any], roster_players: Optional[List[Dict[str, Any]]] = None) -> bool:
+        if not roster_players:
+            return False
+
+        player_position = str(player_row.get("position", "")).strip().upper()
+        player_team = str(player_row.get("pro_team", "") or "").strip().upper()
+        if not player_position or not player_team:
+            return False
+
+        for roster_player in roster_players:
+            if roster_player is player_row:
+                continue
+
+            roster_position = str(roster_player.get("position", "")).strip().upper()
+            roster_team = str(roster_player.get("pro_team", "") or "").strip().upper()
+            if roster_position != player_position or roster_team != player_team:
+                continue
+
+            status = str(roster_player.get("status", "")).strip().upper()
+            if status in cls._INJURY_CONTEXT_STATUSES:
+                return True
+
+        return False
+
+    @staticmethod
+    def _has_favorable_matchup(player_row: Dict[str, Any]) -> bool:
+        favorable = player_row.get("matchup_favorable")
+        if isinstance(favorable, bool):
+            return favorable
+
+        matchup_rank = player_row.get("matchup_rank")
+        if isinstance(matchup_rank, (int, float)):
+            return float(matchup_rank) >= 16.0
+
+        return False
+
+    @classmethod
     def _drop_sort_key(cls, player_row: Dict[str, Any]) -> Tuple[int, float]:
         # IR players are prioritized for drop regardless of score.
         ir_priority = 0 if cls._is_ir_player(player_row) else 1
@@ -111,10 +155,20 @@ class RosterOptimizer:
             team_id=getattr(selected_team, "team_id", None),
         )
 
+        league_roster_players: List[Dict[str, Any]] = []
+        for team in getattr(league, "teams", []):
+            team_roster = self.client.get_roster_players(
+                league=league,
+                team_id=getattr(team, "team_id", None),
+            )
+            if team_roster:
+                league_roster_players.extend(team_roster)
+
         free_agents = self.client.get_free_agents(
             league=league,
             size=self.config.free_agent_sample_size,
         )
+        context_players = list(league_roster_players) + list(free_agents)
 
         # Reuse the already-fetched current-year roster + free agents and avoid
         # a second full league fetch on every analyze request.
@@ -159,6 +213,10 @@ class RosterOptimizer:
 
             for add_candidate in top_free_agents:
                 improvement = float(add_candidate.get("score", 0.0)) - float(drop_candidate.get("score", 0.0))
+                if self._is_injury_context_player(drop_candidate, context_players):
+                    improvement += self.config.injury_context_weight
+                if self._has_favorable_matchup(add_candidate):
+                    improvement += self.config.matchup_weight
                 if improvement < self.config.min_score_improvement:
                     continue
 
@@ -169,8 +227,8 @@ class RosterOptimizer:
                         "drop": drop_candidate,
                         "score_delta": round(improvement, 3),
                         "reason": (
-                            "Weighted score uses this season performance and previous year "
-                            "as historical baseline."
+                            "Weighted score uses current season production, prior-season history, "
+                            "injury context, and matchup strength."
                         ),
                     }
                 )
@@ -198,7 +256,9 @@ class RosterOptimizer:
             "scoring_method": {
                 "current_year_weight": self.config.current_year_weight,
                 "prior_year_weight": self.config.prior_year_weight,
-                "formula": "score = current_year_weight * current_ppg + prior_year_weight * prior_year_ppg",
+                "injury_context_weight": self.config.injury_context_weight,
+                "matchup_weight": self.config.matchup_weight,
+                "formula": "score = current_year_weight * current_points + prior_year_weight * prior_year_points + injury_context_weight * is_out_or_ir + matchup_weight * favorable_matchup",
             },
             "summary": {
                 "roster_size": len(roster_players),
