@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+import logging
 import os
 from backend.models.db_models import Base
 from backend.database import engine
@@ -8,6 +9,12 @@ from backend.api.routes import router as api_router
 
 # Load environment variables
 load_dotenv()
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Create all database tables
 Base.metadata.create_all(bind=engine)
@@ -29,13 +36,16 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
+logger.info("Fantasy Football Prediction API started; CORS origins=%s", allowed_origins)
 
 @app.get("/")
 async def root():
+    logger.debug("root() called: basic liveness check hit")
     return {"message": "Fantasy Football Prediction API"}
 
 @app.get("/health")
 async def health():
+    logger.debug("health() called: health check hit")
     return {"status": "healthy"}
 
 if __name__ == "__main__":

@@ -279,6 +279,16 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
 
+  const [activeTab, setActiveTab] = useState("roster");
+  const [draftSlot, setDraftSlot] = useState("");
+  const [draftedRoster, setDraftedRoster] = useState([]);
+  const [draftRecommendations, setDraftRecommendations] = useState([]);
+  const [draftMeta, setDraftMeta] = useState(null);
+
+  const [draftStatus, setDraftStatus] = useState("Run draft recommendations to see suggestions.");
+  const [isDrafting, setIsDrafting] = useState(false);
+  const [draftError, setDraftError] = useState("");
+
   useEffect(() => {
     let isMounted = true;
 
@@ -447,6 +457,55 @@ export default function App() {
     }
   }
 
+  async function handleDraftRecommend() {
+    setDraftError("");
+
+    if (!leagueId) {
+      setDraftError("League ID is required.");
+      return;
+    }
+
+    if (!year) {
+      setDraftError("Season year is required.");
+      return;
+    }
+
+    const query = new URLSearchParams({ year: String(year) });
+    if (teamId) {
+      query.set("team_id", String(teamId));
+    }
+    if (draftSlot) {
+      query.set("draft_slot", String(draftSlot));
+    }
+
+    setIsDrafting(true);
+    setDraftStatus("Connecting to ESPN and checking the live draft...");
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/leagues/${encodeURIComponent(leagueId)}/draft-recommendations?${query.toString()}`
+      );
+
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload?.detail || `Draft recommendation failed with status ${response.status}`);
+      }
+
+      setDraftedRoster(Array.isArray(payload.current_roster) ? payload.current_roster : []);
+      setDraftRecommendations(Array.isArray(payload.recommendations) ? payload.recommendations : []);
+      setDraftMeta(payload.draft_status || null);
+
+      const picksMade = Number(payload?.draft_status?.picks_made || 0);
+      const teamName = payload?.team?.team_name || "team";
+      setDraftStatus(`${teamName}: ${picksMade} picks made so far in the draft.`);
+    } catch (draftRecommendError) {
+      setDraftError(draftRecommendError.message || "Draft recommendation failed.");
+      setDraftStatus("Draft recommendation failed.");
+    } finally {
+      setIsDrafting(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="hero">
@@ -456,6 +515,23 @@ export default function App() {
           Analyze your ESPN roster against current free agency and get weighted add/drop recommendations.
         </p>
       </header>
+
+      <nav className="tab-bar">
+        <button
+          type="button"
+          className={activeTab === "roster" ? "tab tab-active" : "tab"}
+          onClick={() => setActiveTab("roster")}
+        >
+          Roster Optimizer
+        </button>
+        <button
+          type="button"
+          className={activeTab === "draft" ? "tab tab-active" : "tab"}
+          onClick={() => setActiveTab("draft")}
+        >
+          Draft Optimizer
+        </button>
+      </nav>
 
       <section className="panel controls-panel">
         <div className="control-grid">
@@ -493,105 +569,229 @@ export default function App() {
             </select>
           </label>
 
-          <button type="button" onClick={handleAnalyze} disabled={isAnalyzing}>
-            {isAnalyzing ? "Analyzing..." : "Analyze Roster"}
-          </button>
+          {activeTab === "draft" ? (
+            <label>
+              <span>Draft Slot (if round 1 incomplete)</span>
+              <input
+                type="number"
+                min="1"
+                value={draftSlot}
+                onChange={(event) => setDraftSlot(event.target.value)}
+                placeholder="Optional"
+              />
+            </label>
+          ) : null}
+
+          {activeTab === "roster" ? (
+            <button type="button" onClick={handleAnalyze} disabled={isAnalyzing}>
+              {isAnalyzing ? "Analyzing..." : "Analyze Roster"}
+            </button>
+          ) : (
+            <button type="button" onClick={handleDraftRecommend} disabled={isDrafting}>
+              {isDrafting ? "Checking Draft..." : "Get Draft Recommendations"}
+            </button>
+          )}
         </div>
 
-        <p className="status-text">{status}</p>
-        {error ? <p className="error-text">{error}</p> : null}
+        {activeTab === "roster" ? (
+          <>
+            <p className="status-text">{status}</p>
+            {error ? <p className="error-text">{error}</p> : null}
+          </>
+        ) : (
+          <>
+            <p className="status-text">{draftStatus}</p>
+            {draftError ? <p className="error-text">{draftError}</p> : null}
+          </>
+        )}
       </section>
 
-      <section className="panel table-panel">
-        <h2>Roster</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Slot</th>
-                <th>Player</th>
-                <th>Pos</th>
-                <th>NFL</th>
-                <th>Total Season Points</th>
-                <th>PPG</th>
-                <th>Weighted Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRoster.length === 0 ? (
-                <tr>
-                    <td colSpan={7} className="empty-cell">
-                    Run analysis to view roster data.
-                  </td>
-                </tr>
-              ) : (
-                sortedRoster.map((player, index) => (
-                  <tr key={`${player.name || "player"}-${index}`}>
-                    <td>{player.roster_slot || ""}</td>
-                    <td>{player.name || ""}</td>
-                    <td>{player.position || ""}</td>
-                    <td>{player.pro_team || ""}</td>
-                    <td>{formatNumber(player.total_points)}</td>
-                    <td>{formatNumber(player.points_per_game)}</td>
-                    <td>{formatNumber(player.score)}</td>
+      {activeTab === "roster" ? (
+        <>
+          <section className="panel table-panel">
+            <h2>Roster</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Slot</th>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>NFL</th>
+                    <th>Total Season Points</th>
+                    <th>PPG</th>
+                    <th>Weighted Score</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="panel table-panel">
-        <h2>Recommended Add / Drop Moves</h2>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Pos</th>
-                <th>Add</th>
-                <th>Add Total Season Points</th>
-                <th>PPG</th>
-                <th>Drop</th>
-                <th>Drop Total Season Points</th>
-                <th>Score Delta</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recommendations.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="empty-cell">
-                    No recommendations yet.
-                  </td>
-                </tr>
-              ) : (
-                recommendations.map((rec, index) => {
-                  const addName = rec?.add?.name || "";
-                  const addTotalPoints = Number(rec?.add?.total_points || 0);
-                  const addPpg = Number(rec?.add?.points_per_game || 0);
-                  const dropName = rec?.drop?.name || "";
-                  const dropTotalPoints = Number(rec?.drop?.total_points || 0);
-                  const delta = Number(rec?.score_delta || 0);
-
-                  return (
-                    <tr key={`${rec.position || "pos"}-${index}`}>
-                      <td>{rec.position || ""}</td>
-                      <td>{addName}</td>
-                      <td>{formatNumber(addTotalPoints)}</td>
-                      <td>{formatNumber(addPpg)}</td>
-                      <td>{dropName}</td>
-                      <td>{formatNumber(dropTotalPoints)}</td>
-                      <td className="delta-cell">+{formatNumber(delta)}</td>
-                      <td>{rec.reason || ""}</td>
+                </thead>
+                <tbody>
+                  {sortedRoster.length === 0 ? (
+                    <tr>
+                        <td colSpan={7} className="empty-cell">
+                        Run analysis to view roster data.
+                      </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                  ) : (
+                    sortedRoster.map((player, index) => (
+                      <tr key={`${player.name || "player"}-${index}`}>
+                        <td>{player.roster_slot || ""}</td>
+                        <td>{player.name || ""}</td>
+                        <td>{player.position || ""}</td>
+                        <td>{player.pro_team || ""}</td>
+                        <td>{formatNumber(player.total_points)}</td>
+                        <td>{formatNumber(player.points_per_game)}</td>
+                        <td>{formatNumber(player.score)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel table-panel">
+            <h2>Recommended Add / Drop Moves</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Pos</th>
+                    <th>Add</th>
+                    <th>Add Total Season Points</th>
+                    <th>PPG</th>
+                    <th>Drop</th>
+                    <th>Drop Total Season Points</th>
+                    <th>Score Delta</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recommendations.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="empty-cell">
+                        No recommendations yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    recommendations.map((rec, index) => {
+                      const addName = rec?.add?.name || "";
+                      const addTotalPoints = Number(rec?.add?.total_points || 0);
+                      const addPpg = Number(rec?.add?.points_per_game || 0);
+                      const dropName = rec?.drop?.name || "";
+                      const dropTotalPoints = Number(rec?.drop?.total_points || 0);
+                      const delta = Number(rec?.score_delta || 0);
+
+                      return (
+                        <tr key={`${rec.position || "pos"}-${index}`}>
+                          <td>{rec.position || ""}</td>
+                          <td>{addName}</td>
+                          <td>{formatNumber(addTotalPoints)}</td>
+                          <td>{formatNumber(addPpg)}</td>
+                          <td>{dropName}</td>
+                          <td>{formatNumber(dropTotalPoints)}</td>
+                          <td className="delta-cell">+{formatNumber(delta)}</td>
+                          <td>{rec.reason || ""}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      ) : (
+        <>
+          {draftMeta ? (
+            <section className="panel table-panel">
+              <h2>Draft Status</h2>
+              <p className="status-text">
+                Picks made: {draftMeta.picks_made ?? 0} | Next overall pick: {draftMeta.next_overall_pick ?? "-"} |{" "}
+                {draftMeta.picks_until_your_turn === 0
+                  ? "You are on the clock now"
+                  : draftMeta.picks_until_your_turn != null
+                    ? `Picks until your turn: ${draftMeta.picks_until_your_turn}`
+                    : "Draft order unknown yet"}
+              </p>
+            </section>
+          ) : null}
+
+          <section className="panel table-panel">
+            <h2>Current Drafted Roster</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>NFL</th>
+                    <th>Total Season Points</th>
+                    <th>PPG</th>
+                    <th>Weighted Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draftedRoster.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="empty-cell">
+                        Get draft recommendations to view your drafted players.
+                      </td>
+                    </tr>
+                  ) : (
+                    draftedRoster.map((player, index) => (
+                      <tr key={`${player.name || "player"}-${index}`}>
+                        <td>{player.name || ""}</td>
+                        <td>{player.position || ""}</td>
+                        <td>{player.pro_team || ""}</td>
+                        <td>{formatNumber(player.total_points)}</td>
+                        <td>{formatNumber(player.points_per_game)}</td>
+                        <td>{formatNumber(player.score)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="panel table-panel">
+            <h2>Suggested Next Picks</h2>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>NFL</th>
+                    <th>Total Season Points</th>
+                    <th>PPG</th>
+                    <th>Draft Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draftRecommendations.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="empty-cell">
+                        No draft recommendations yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    draftRecommendations.map((player, index) => (
+                      <tr key={`${player.name || "player"}-${index}`}>
+                        <td>{player.name || ""}</td>
+                        <td>{player.position || ""}</td>
+                        <td>{player.pro_team || ""}</td>
+                        <td>{formatNumber(player.total_points)}</td>
+                        <td>{formatNumber(player.points_per_game)}</td>
+                        <td>{formatNumber(player.draft_value)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }
