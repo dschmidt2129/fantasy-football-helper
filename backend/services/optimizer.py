@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.services.espn_client import ESPNClient
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -47,6 +50,7 @@ class RosterOptimizer:
         current_snapshot: Dict[str, Dict[str, float]],
         prior_snapshot: Dict[str, Dict[str, float]],
     ) -> float:
+        """Compute a weighted current+prior season score for a single player row."""
         key = player_row.get("key")
         current_points = float(player_row.get("total_points", player_row.get("points_per_game", 0.0)))
 
@@ -63,7 +67,9 @@ class RosterOptimizer:
             self.config.current_year_weight * current_points
             + self.config.prior_year_weight * prior_points
         )
-        return round(weighted, 3)
+        score = round(weighted, 3)
+        logger.debug("_score_player(): key=%s current=%.2f prior=%.2f -> score=%.3f", key, current_points, prior_points, score)
+        return score
 
     @staticmethod
     def _by_position(players: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -76,6 +82,7 @@ class RosterOptimizer:
     @staticmethod
     def _build_snapshot_from_rows(players: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
         """Build a key->metrics snapshot from already-fetched player rows."""
+        logger.debug("_build_snapshot_from_rows() called: building snapshot from %d rows", len(players))
         snapshot: Dict[str, Dict[str, float]] = {}
         for row in players:
             key = row.get("key")
@@ -142,18 +149,26 @@ class RosterOptimizer:
         team_id: Optional[int] = None,
         team_name: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Fetch league/roster/free-agent data and build upgrade recommendations for a team."""
+        logger.info(
+            "analyze_league() called: league_id=%s year=%s team_id=%s team_name=%s",
+            league_id, year, team_id, team_name,
+        )
         league = self.client.get_league(league_id=league_id, year=year)
         if league is None:
+            logger.warning("analyze_league(): ESPNClient could not connect to league_id=%s year=%s", league_id, year)
             raise ValueError(f"Could not connect to ESPN league {league_id} for year {year}")
 
         selected_team = self.client.find_team(league=league, team_id=team_id, team_name=team_name)
         if selected_team is None:
+            logger.warning("analyze_league(): no teams found in league_id=%s", league_id)
             raise ValueError("No teams found in the provided league")
 
         roster_players = self.client.get_roster_players(
             league=league,
             team_id=getattr(selected_team, "team_id", None),
         )
+        logger.debug("analyze_league(): loaded %d roster players for selected team", len(roster_players))
 
         league_roster_players: List[Dict[str, Any]] = []
         for team in getattr(league, "teams", []):
@@ -163,11 +178,13 @@ class RosterOptimizer:
             )
             if team_roster:
                 league_roster_players.extend(team_roster)
+        logger.debug("analyze_league(): loaded %d total rostered players league-wide", len(league_roster_players))
 
         free_agents = self.client.get_free_agents(
             league=league,
             size=self.config.free_agent_sample_size,
         )
+        logger.debug("analyze_league(): loaded %d free agents (sample size=%s)", len(free_agents), self.config.free_agent_sample_size)
         context_players = list(league_roster_players) + list(free_agents)
 
         # Reuse the already-fetched current-year roster + free agents and avoid
@@ -177,6 +194,7 @@ class RosterOptimizer:
         prior_snapshot: Dict[str, Dict[str, float]] = {}
         prior_year = year - 1
         if prior_year > 0:
+            logger.debug("analyze_league(): fetching prior-year snapshot for year=%s", prior_year)
             prior_snapshot = self.client.get_scoring_snapshot(
                 league_id=league_id,
                 year=prior_year,
@@ -235,6 +253,7 @@ class RosterOptimizer:
 
         recommendations.sort(key=lambda item: item.get("score_delta", 0.0), reverse=True)
         recommendations = recommendations[: self.config.top_recommendations]
+        logger.info("analyze_league(): generated %d recommendations for league_id=%s", len(recommendations), league_id)
 
         roster_avg = self._average([float(p.get("score", 0.0)) for p in roster_players])
         free_agent_avg = self._average([float(p.get("score", 0.0)) for p in free_agents])

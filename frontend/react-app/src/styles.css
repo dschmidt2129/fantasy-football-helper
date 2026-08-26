@@ -74,6 +74,34 @@ h1 {
   animation: reveal 500ms ease-out;
 }
 
+.tab-bar {
+  display: flex;
+  gap: 0.5rem;
+  animation: reveal 460ms ease-out;
+}
+
+.tab {
+  cursor: pointer;
+  color: var(--muted-ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 0.6rem 1rem;
+  font-size: 0.92rem;
+  font-family: inherit;
+  transition: transform 120ms ease, filter 120ms ease;
+}
+
+.tab:hover {
+  transform: translateY(-1px);
+}
+
+.tab-active {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+}
+
 .control-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -89,6 +117,7 @@ label {
 }
 
 select,
+input,
 button {
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -98,7 +127,8 @@ button {
   font-family: inherit;
 }
 
-select {
+select,
+input {
   background: #ffffff;
 }
 
